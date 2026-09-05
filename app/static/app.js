@@ -132,11 +132,9 @@ async function showTx(id){const t=await api('/api/v1/transactions/'+id);el('moda
     Payment Status<br>
     <b>${t.payment_status || t.status || 'UNKNOWN'}</b>
 </div><div class="factor">Amount<br><b>₹${t.amount.toFixed(2)}</b></div><div class="factor">Customer<br><b>${t.customer_id}</b></div></div><h2>WHY THIS SCORE</h2>${t.factors.map(f=>`<div class="factor">${f.factor}<span style="float:right">+${f.weight}</span></div>`).join('')||'<div class="small">No dominant risk factors.</div>'}
-<div class="toolbar" style="margin-top:15px">
-    <button class="btn" onclick="workflow('${t.transaction_id || t.id}','VERIFY')">Verify</button>
-    <button class="btn" onclick="workflow('${t.transaction_id || t.id}','ALLOW')">Allow</button>
-    <button class="btn" onclick="workflow('${t.transaction_id || t.id}','RESOLVE')">Resolve</button>
-</div>
+<button class="btn" onclick="workflow('${id}','VERIFY')">Verify</button>
+<button class="btn" onclick="workflow('${id}','ALLOW')">Allow</button>
+<button class="btn" onclick="workflow('${id}','RESOLVE')">Resolve</button>
 `;
 }
 
