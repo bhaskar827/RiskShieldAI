@@ -128,19 +128,39 @@ async function showTx(id){const t=await api('/api/v1/transactions/'+id);el('moda
     Decision<br>
     <b>${t.decision}</b>
 </div>
+const actionId = t.id || t.transaction_id;
+
+console.log('Workflow transaction ID:', actionId);
+
+if (!actionId) {
+    console.error('No transaction ID found:', t);
+    return;
+}
+
+el('verifyBtn').onclick = () => workflow(actionId, 'VERIFY');
+el('allowBtn').onclick = () => workflow(actionId, 'ALLOW');
+el('resolveBtn').onclick = () => workflow(actionId, 'RESOLVE');
 <div class="factor">
     Payment Status<br>
     <b>${t.payment_status || t.status || 'UNKNOWN'}</b>
 </div><div class="factor">Amount<br><b>₹${t.amount.toFixed(2)}</b></div><div class="factor">Customer<br><b>${t.customer_id}</b></div></div><h2>WHY THIS SCORE</h2>${t.factors.map(f=>`<div class="factor">${f.factor}<span style="float:right">+${f.weight}</span></div>`).join('')||'<div class="small">No dominant risk factors.</div>'}
-<button class="btn" onclick="workflow('${id}','VERIFY')">Verify</button>
-<button class="btn" onclick="workflow('${id}','ALLOW')">Allow</button>
-<button class="btn" onclick="workflow('${id}','RESOLVE')">Resolve</button>
+<button class="btn" id="verifyBtn">Verify</button>
+<button class="btn" id="allowBtn">Allow</button>
+<button class="btn" id="resolveBtn">Resolve</button>
 `;
 }
 
 async function workflow(id, action) {
+    console.log('Workflow clicked:', { id, action });
+
+    if (!id) {
+        console.error('Missing transaction ID');
+        alert('Transaction ID is missing.');
+        return;
+    }
+
     try {
-        await api(
+        const result = await api(
             `/api/v1/transactions/${encodeURIComponent(id)}/action`,
             {
                 method: 'POST',
@@ -153,6 +173,8 @@ async function workflow(id, action) {
             }
         );
 
+        console.log('Workflow response:', result);
+
         el('modal').classList.remove('open');
         await loadAll();
 
@@ -161,5 +183,3 @@ async function workflow(id, action) {
         alert('Action failed. Check the console.');
     }
 }
-
-shell();
