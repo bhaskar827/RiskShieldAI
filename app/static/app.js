@@ -136,5 +136,5 @@ async function showTx(id){const t=await api('/api/v1/transactions/'+id);el('moda
     <button class="btn" onclick="workflow('${t.transaction_id}','ALLOW')">Allow</button>
     <button class="btn" onclick="workflow('${t.transaction_id}','RESOLVE')">Resolve</button>
 </div>
-async function workflow(id,a){await api(`/api/v1/transactions/${id}/action`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});el('modal').classList.remove('open');loadAll()}
+async function workflow(id,a){await api(`/api/v1/transactions/${id}/action`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});el('modal').classList.remove('open');loadAll()
 shell();
