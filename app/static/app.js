@@ -374,9 +374,7 @@ function renderLive() {
                     </span>
 
                     <div class="small">
-                        ${t.decision}
-                        •
-                        ${t.payment_status || t.status || 'UNKNOWN'}
+                        ${t.decision} • ${t.payment_status || 'UNKNOWN'} • ${t.status || 'OPEN'}
                     </div>
 
                 </div>
@@ -432,9 +430,7 @@ function renderFeed() {
                     </span>
 
                     <div class="small">
-                        ${t.decision}
-                        •
-                        ${t.payment_status || t.status || 'UNKNOWN'}
+                        ${t.decision} • ${t.payment_status || 'UNKNOWN'} • ${t.status || 'OPEN'}
                     </div>
 
                 </div>
@@ -1472,68 +1468,79 @@ async function showTx(id) {
  * Operator workflow action.
  */
 async function workflow(id, action) {
-
-    console.log(
-        'Workflow clicked:',
-        {
-            id,
-            action
-        }
-    );
+    console.log('Workflow clicked:', { id, action });
 
     if (!id) {
-
-        console.error(
-            'Missing transaction ID'
-        );
-
-        alert(
-            'Transaction ID is missing.'
-        );
-
+        console.error('Missing transaction ID');
+        alert('Transaction ID is missing.');
         return;
     }
 
     try {
-
+        // 1. Perform the backend workflow action
         const result = await api(
-            '/api/v1/transactions/' +
-            encodeURIComponent(id) +
-            '/action',
+            '/api/v1/transactions/' + encodeURIComponent(id) + '/action',
             {
                 method: 'POST',
-
                 headers: {
-                    'Content-Type':
-                        'application/json'
+                    'Content-Type': 'application/json'
                 },
-
                 body: JSON.stringify({
                     action: action
                 })
             }
         );
 
-        console.log(
-            'Workflow response:',
-            result
+        console.log('Workflow response:', result);
+
+        if (!result.ok) {
+            throw new Error(result.detail || 'Workflow action failed');
+        }
+
+        // 2. Get the UPDATED transaction from backend
+        const updated = await api(
+            '/api/v1/transactions/' + encodeURIComponent(id)
         );
 
+        console.log('Updated transaction:', updated);
+
+        // 3. Update the frontend state
+        const index = state.tx.findIndex(
+            x => x.transaction_id === id || x.id === id
+        );
+
+        if (index >= 0) {
+            state.tx[index] = {
+                ...state.tx[index],
+                ...updated
+            };
+        } else {
+            state.tx.unshift({
+                ...updated,
+                transaction_id: updated.id
+            });
+        }
+
+        // 4. Close modal
         el('modal').classList.remove('open');
 
-        await loadAll();
+        // 5. Immediately redraw the visible frontend
+        renderFeed();
+
+        if (state.tab === 'live') {
+            renderLive();
+        }
+
+        await renderOverview();
+        await renderAlerts();
+        await renderExplorer();
+        renderCustomers();
+        await renderAudit();
+        refreshHeader();
 
     } catch (error) {
-
-        console.error(
-            'Workflow action failed:',
-            error
-        );
-
-        alert(
-            'Action failed: ' +
-            error.message
-        );
+        console.error('Workflow action failed:', error);
+        alert('Action failed. Check the console.');
     }
 }
 
