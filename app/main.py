@@ -57,7 +57,15 @@ def init_db():
       source TEXT DEFAULT 'simulation', provider_id TEXT, event_type TEXT,
       currency TEXT DEFAULT 'INR'
     );
-    CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT, transaction_id TEXT, created_at TEXT, action TEXT, actor TEXT DEFAULT 'risk-engine');
+    CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT, transaction_id TEXT, created_at TEXT, action TEXT, actor TEXT DEFAULT 'risk-engine');''')
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS webhook_events(
+        provider_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        PRIMARY KEY(provider_id, event_type)
+    )
+
     ''')
     # Upgrade databases created by v1.0.
     cols = {r['name'] for r in c.execute('PRAGMA table_info(transactions)').fetchall()}
