@@ -92,21 +92,112 @@ def analytics():
     return {'total_transactions':n,'high_risk':high,'medium_risk':med,'low_risk':low,'volume':round(volume,2),'estimated_exposure':round(blocked,2),'false_positive_cost':engine.metrics['false_positive_cost_demo'],'risk_distribution':{'HIGH':high,'MEDIUM':med,'LOW':low},'razorpay_transactions':live}
 
 @app.get('/api/v1/transactions')
-def transactions(limit:int=100, risk:str|None=None, q:str|None=None, source:str|None=None):
-    c=db(); sql='SELECT * FROM transactions WHERE 1=1'; args=[]
-    if risk: sql+=' AND risk_level=?'; args.append(risk.upper())
-    if source: sql+=' AND source=?'; args.append(source.lower())
-    if q: sql+=' AND (id LIKE ? OR customer_id LIKE ? OR payment_method LIKE ? OR provider_id LIKE ?)'; args += [f'%{q}%']*4
-    sql+=' ORDER BY created_at DESC LIMIT ?'; args.append(min(limit,500))
-    rows=c.execute(sql,args).fetchall(); c.close()
-    return [dict(r) | {'factors':json.loads(r['factors'])} for r in rows]
+def transactions(
+    limit: int = 100,
+    risk: str | None = None,
+    q: str | None = None,
+    source: str | None = None
+):
+    c = db()
 
+    sql = 'SELECT * FROM transactions WHERE 1=1'
+    args = []
+
+    if risk:
+        sql += ' AND risk_level=?'
+        args.append(risk.upper())
+
+    if source:
+        sql += ' AND source=?'
+        args.append(source.lower())
+
+    if q:
+        sql += '''
+            AND (
+                id LIKE ?
+                OR customer_id LIKE ?
+                OR payment_method LIKE ?
+                OR provider_id LIKE ?
+            )
+        '''
+        args += [f'%{q}%'] * 4
+
+    sql += ' ORDER BY created_at DESC LIMIT ?'
+    args.append(min(limit, 500))
+
+    rows = c.execute(sql, args).fetchall()
+    c.close()
+
+    result = []
+
+    for r in rows:
+        item = dict(r)
+
+        # Convert Razorpay lifecycle event into
+        # a clear payment status for the frontend.
+        event_type = item.get('event_type')
+
+        if event_type == 'payment.captured':
+            item['payment_status'] = 'CAPTURED'
+
+        elif event_type == 'payment.authorized':
+            item['payment_status'] = 'AUTHORIZED'
+
+        elif event_type == 'payment.failed':
+            item['payment_status'] = 'FAILED'
+
+        else:
+            item['payment_status'] = (
+                item.get('status') or 'UNKNOWN'
+            ).upper()
+
+        item['factors'] = json.loads(
+            item.get('factors') or '[]'
+        )
+
+        result.append(item)
+
+    return result
 @app.get('/api/v1/transactions/{txid}')
-def transaction(txid:str):
-    c=db(); r=c.execute('SELECT * FROM transactions WHERE id=?',(txid,)).fetchone(); c.close()
-    if not r: raise HTTPException(404,'Transaction not found')
-    return dict(r) | {'factors':json.loads(r['factors'])}
+def transaction(txid: str):
+    c = db()
 
+    r = c.execute(
+        'SELECT * FROM transactions WHERE id=?',
+        (txid,)
+    ).fetchone()
+
+    c.close()
+
+    if not r:
+        raise HTTPException(
+            404,
+            'Transaction not found'
+        )
+
+    item = dict(r)
+
+    event_type = item.get('event_type')
+
+    if event_type == 'payment.captured':
+        item['payment_status'] = 'CAPTURED'
+
+    elif event_type == 'payment.authorized':
+        item['payment_status'] = 'AUTHORIZED'
+
+    elif event_type == 'payment.failed':
+        item['payment_status'] = 'FAILED'
+
+    else:
+        item['payment_status'] = (
+            item.get('status') or 'UNKNOWN'
+        ).upper()
+
+    item['factors'] = json.loads(
+        item.get('factors') or '[]'
+    )
+
+    return item
 @app.get('/api/v1/audit')
 def audit(limit:int=100):
     c=db(); rows=c.execute('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?', (min(limit,500),)).fetchall(); c.close(); return [dict(r) for r in rows]
@@ -124,16 +215,142 @@ def score(req:ScoreRequest):
     return {'transaction_id':txid,**result}
 
 
-def save_transaction(txid,now,payload,result,label,source='simulation',provider_id=None,event_type=None,currency='INR'):
-    c=db()
-    c.execute('''INSERT OR REPLACE INTO transactions
-      (id,created_at,customer_id,amount,payment_method,risk_score,risk_level,decision,label,factors,status,source,provider_id,event_type,currency)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
-      txid,now,payload['customer_id'],payload['amount'],payload['payment_method'],result['risk_score'],result['risk_level'],result['decision'],label,json.dumps(result['factors']),'open',source,provider_id,event_type,currency))
-    c.execute('INSERT INTO audit_logs(transaction_id,created_at,action,actor) VALUES(?,?,?,?)',(txid,now,'SCORED',source))
-    c.commit(); c.close()
+def save_transaction(
+    txid,
+    now,
+    payload,
+    result,
+    label,
+    source='simulation',
+    provider_id=None,
+    event_type=None,
+    currency='INR'
+):
+    c = db()
 
+    existing = None
 
+    if provider_id:
+        existing = c.execute(
+            'SELECT id FROM transactions WHERE provider_id=?',
+            (provider_id,)
+        ).fetchone()
+
+    # Map Razorpay lifecycle event to actual payment status
+    if event_type == 'payment.captured':
+        payment_status = 'CAPTURED'
+    elif event_type == 'payment.authorized':
+        payment_status = 'AUTHORIZED'
+    elif event_type == 'payment.failed':
+        payment_status = 'FAILED'
+    else:
+        payment_status = 'OPEN'
+
+    if existing:
+        txid = existing['id']
+
+        c.execute(
+            """
+            UPDATE transactions SET
+                created_at=?,
+                customer_id=?,
+                amount=?,
+                payment_method=?,
+                risk_score=?,
+                risk_level=?,
+                decision=?,
+                label=?,
+                factors=?,
+                status=?,
+                source=?,
+                provider_id=?,
+                event_type=?,
+                currency=?
+            WHERE id=?
+            """,
+            (
+                now,
+                payload['customer_id'],
+                payload['amount'],
+                payload['payment_method'],
+                result['risk_score'],
+                result['risk_level'],
+                result['decision'],
+                result['label'],
+                json.dumps(result['factors']),
+                payment_status,
+                source,
+                provider_id,
+                event_type,
+                currency,
+                txid
+            )
+        )
+
+        created = False
+
+    else:
+        c.execute(
+            """
+            INSERT INTO transactions
+            (
+                id,
+                created_at,
+                customer_id,
+                amount,
+                payment_method,
+                risk_score,
+                risk_level,
+                decision,
+                label,
+                factors,
+                status,
+                source,
+                provider_id,
+                event_type,
+                currency
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                txid,
+                now,
+                payload['customer_id'],
+                payload['amount'],
+                payload['payment_method'],
+                result['risk_score'],
+                result['risk_level'],
+                result['decision'],
+                result['label'],
+                json.dumps(result['factors']),
+                payment_status,
+                source,
+                provider_id,
+                event_type,
+                currency
+            )
+        )
+
+        created = True
+
+    c.execute(
+        """
+        INSERT INTO audit_logs
+        (transaction_id, created_at, action, actor)
+        VALUES(?,?,?,?)
+        """,
+        (
+            txid,
+            now,
+            'SCORED',
+            source
+        )
+    )
+
+    c.commit()
+    c.close()
+
+    return txid, created
 def customer_features(customer_id, amount, now_iso):
     c=db(); rows=c.execute('SELECT * FROM transactions WHERE customer_id=? ORDER BY created_at DESC LIMIT 200',(customer_id,)).fetchall(); c.close()
     if not rows:
@@ -205,42 +422,182 @@ async def demo_event(request: Request):
 
 @app.post('/api/v1/webhooks/razorpay')
 async def razorpay_webhook(request: Request):
-    raw=await request.body()
-    verify_webhook(raw,request.headers.get('X-Razorpay-Signature'))
-    payload=json.loads(raw.decode('utf-8'))
-    event_type=payload.get('event','')
-    payment=((payload.get('payload') or {}).get('payment') or {}).get('entity') or {}
+    raw = await request.body()
+
+    verify_webhook(
+        raw,
+        request.headers.get('X-Razorpay-Signature')
+    )
+
+    payload = json.loads(raw.decode('utf-8'))
+
+    event_type = payload.get('event', '')
+
+    payment = (
+        (payload.get('payload') or {})
+        .get('payment') or {}
+    ).get('entity') or {}
+
     if not payment:
-        # Accept non-payment events without pretending they are scored transactions.
-        return {'ok':True,'ignored':True,'event':event_type}
-    supported={'payment.authorized','payment.captured','payment.failed'}
+        return {
+            'ok': True,
+            'ignored': True,
+            'event': event_type
+        }
+
+    supported = {
+        'payment.authorized',
+        'payment.captured',
+        'payment.failed'
+    }
+
     if event_type not in supported:
-        return {'ok':True,'ignored':True,'event':event_type}
-    provider_id=str(payment.get('id') or '')
+        return {
+            'ok': True,
+            'ignored': True,
+            'event': event_type
+        }
+
+    provider_id = str(payment.get('id') or '')
+
     if not provider_id:
-        raise HTTPException(400,'Webhook payment id missing')
-    now=datetime.now(timezone.utc).isoformat()
-    tx=payment_to_payload(payment,now)
-    result=engine.score(tx)
+        raise HTTPException(
+            400,
+            'Webhook payment id missing'
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # -------------------------------------------------
+    # DEDUPLICATE THE SAME RAZORPAY EVENT
+    # -------------------------------------------------
+
     c = db()
-    existing = c.execute(
-        'SELECT id FROM transactions WHERE provider_id=?',
-        (provider_id,)
-    ).fetchone()
+
+    claimed = c.execute(
+        """
+        INSERT OR IGNORE INTO webhook_events
+        (
+            provider_id,
+            event_type,
+            received_at
+        )
+        VALUES(?,?,?)
+        """,
+        (
+            provider_id,
+            event_type,
+            now
+        )
+    ).rowcount
+
+    c.commit()
     c.close()
 
-    if existing:
+    if not claimed:
+        c = db()
+
+        existing = c.execute(
+            'SELECT id FROM transactions WHERE provider_id=?',
+            (provider_id,)
+        ).fetchone()
+
+        c.close()
+
         return {
             'ok': True,
             'duplicate': True,
-            'transaction_id': existing['id']
+            'transaction_id':
+                existing['id']
+                if existing
+                else 'RZP-' + provider_id
         }
-    txid='RZP-'+provider_id
-    save_transaction(txid,now,tx,result,label=None,source='razorpay',provider_id=provider_id,event_type=event_type,currency=payment.get('currency','INR'))
-    event={'transaction_id':txid,'created_at':now,'source':'razorpay','event_type':event_type,'provider_id':provider_id,'currency':payment.get('currency','INR'),**tx,**result}
-    await broadcast(event)
-    return {'ok':True,'transaction_id':txid,'risk_score':result['risk_score'],'risk_level':result['risk_level'],'decision':result['decision']}
 
+    # -------------------------------------------------
+    # CONVERT RAZORPAY PAYMENT TO OUR TRANSACTION
+    # -------------------------------------------------
+
+    tx = payment_to_payload(
+        payment,
+        now
+    )
+
+    result = engine.score(tx)
+
+    txid = 'RZP-' + provider_id
+
+    txid, created = save_transaction(
+        txid,
+        now,
+        tx,
+        result,
+        label=None,
+        source='razorpay',
+        provider_id=provider_id,
+        event_type=event_type,
+        currency=payment.get(
+            'currency',
+            'INR'
+        )
+    )
+
+    # -------------------------------------------------
+    # HUMAN-READABLE PAYMENT STATUS
+    # -------------------------------------------------
+
+    if event_type == 'payment.failed':
+        payment_status = 'FAILED'
+
+    elif event_type == 'payment.captured':
+        payment_status = 'CAPTURED'
+
+    elif event_type == 'payment.authorized':
+        payment_status = 'AUTHORIZED'
+
+    else:
+        payment_status = 'UNKNOWN'
+
+    # -------------------------------------------------
+    # SEND TO LIVE DASHBOARD
+    # -------------------------------------------------
+
+    event = {
+        'transaction_id': txid,
+        'created_at': now,
+
+        'source': 'razorpay',
+        'event_type': event_type,
+        'provider_id': provider_id,
+
+        'payment_status': payment_status,
+
+        'currency': payment.get(
+            'currency',
+            'INR'
+        ),
+
+        **tx,
+        **result,
+
+        'type':
+            'transaction_created'
+            if created
+            else 'transaction_updated'
+    }
+
+    await broadcast(event)
+
+    return {
+        'ok': True,
+        'transaction_id': txid,
+        'created': created,
+
+        'payment_status': payment_status,
+
+        'risk_score': result['risk_score'],
+        'risk_level': result['risk_level'],
+        'decision': result['decision']
+    }
 @app.post('/api/v1/transactions/{txid}/action')
 async def action(txid:str, req:ActionRequest):
     allowed={'ALLOW','VERIFY','MANUAL REVIEW','RESOLVE','DISMISS'}
