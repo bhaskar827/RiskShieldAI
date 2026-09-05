@@ -219,12 +219,22 @@ async def razorpay_webhook(request: Request):
     provider_id=str(payment.get('id') or '')
     if not provider_id:
         raise HTTPException(400,'Webhook payment id missing')
-    c=db(); existing=c.execute('SELECT id FROM transactions WHERE provider_id=? AND event_type=?',(provider_id,event_type)).fetchone(); c.close()
-    if existing:
-        return {'ok':True,'duplicate':True,'transaction_id':existing['id']}
     now=datetime.now(timezone.utc).isoformat()
     tx=payment_to_payload(payment,now)
     result=engine.score(tx)
+    c = db()
+    existing = c.execute(
+        'SELECT id FROM transactions WHERE provider_id=?',
+        (provider_id,)
+    ).fetchone()
+    c.close()
+
+    if existing:
+        return {
+            'ok': True,
+            'duplicate': True,
+            'transaction_id': existing['id']
+        }
     txid='RZP-'+provider_id
     save_transaction(txid,now,tx,result,label=None,source='razorpay',provider_id=provider_id,event_type=event_type,currency=payment.get('currency','INR'))
     event={'transaction_id':txid,'created_at':now,'source':'razorpay','event_type':event_type,'provider_id':provider_id,'currency':payment.get('currency','INR'),**tx,**result}
