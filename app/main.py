@@ -128,7 +128,10 @@ def init_db():
         CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_provider
         ON transactions(provider_id)
         WHERE provider_id IS NOT NULL
-    ''')    c.commit(); c.close()
+    ''')
+
+    c.commit()
+    c.close()
 
 init_db()
 
