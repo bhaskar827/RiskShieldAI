@@ -47,29 +47,40 @@ function connect(){
     };
 
     state.ws.onmessage=e=>{
-        const t=JSON.parse(e.data);
+    const t=JSON.parse(e.data);
 
-        if(t.type==='status'){
-            return;
-        }
+    if(t.type==='status'){
+        return;
+    }
 
+    const i=state.tx.findIndex(
+        x=>x.transaction_id===t.transaction_id
+    );
+
+    if(i>=0){
+        state.tx[i]={
+            ...state.tx[i],
+            ...t
+        };
+    }else{
         state.tx.unshift(t);
-        state.tx=state.tx.slice(0,100);
+    }
 
-        renderFeed();
+    state.tx=state.tx.slice(0,100);
 
-        if(state.tab==='live'){
-            renderLive();
-        }
+    renderFeed();
 
-        renderOverview();
-        renderAlerts();
-        renderExplorer();
-        renderCustomers();
-        renderAudit();
-        refreshHeader();
-    };
+    if(state.tab==='live'){
+        renderLive();
+    }
 
+    renderOverview();
+    renderAlerts();
+    renderExplorer();
+    renderCustomers();
+    renderAudit();
+    refreshHeader();
+};
     state.ws.onerror=()=>{
         try{
             state.ws.close();

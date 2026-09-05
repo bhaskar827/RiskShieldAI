@@ -584,11 +584,46 @@ async def razorpay_webhook(request: Request):
     # -------------------------------------------------
 
     tx = payment_to_payload(
-        payment,
-        now
+    payment,
+    now
     )
 
-    result = engine.score(tx)
+    # -------------------------------------------------
+    # KEEP RISK SCORE STABLE ACROSS PAYMENT LIFECYCLE
+    # -------------------------------------------------
+
+    c = db()
+
+    existing_tx = c.execute(
+        '''
+        SELECT
+            id,
+            risk_score,
+            risk_level,
+            decision,
+            label,
+            factors
+        FROM transactions
+        WHERE provider_id=?
+        ''',
+        (provider_id,)
+    ).fetchone()
+
+    c.close()
+
+    if existing_tx:
+        # Payment already scored previously.
+        # Reuse the original risk result.
+        result = {
+            'risk_score': existing_tx['risk_score'],
+            'risk_level': existing_tx['risk_level'],
+            'decision': existing_tx['decision'],
+            'label': existing_tx['label'],
+            'factors': json.loads(existing_tx['factors'])
+        }
+    else:
+        # First lifecycle event for this payment.
+        result = engine.score(tx)
 
     txid = 'RZP-' + provider_id
 
