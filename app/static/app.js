@@ -11,37 +11,75 @@ function renderLive(){const x=el('tab-live'); if(!x)return; x.innerHTML=`<div cl
 function renderFeed(){const f=el('feed');if(!f)return;f.innerHTML=state.tx.slice(0,25).map(t=>`<div class="row" onclick="showTx('${t.transaction_id}')"><div><b>${t.payment_method?.toUpperCase()||'PAYMENT'} • ₹${Number(t.amount).toFixed(0)}</b><div class="mono">${t.transaction_id}</div><div class="small">${t.customer_id} • ${new Date(t.created_at).toLocaleTimeString()}</div></div><div><span class="badge ${t.risk_level.toLowerCase()}">${t.risk_level}</span><div class="small">${t.decision}</div></div></div>`).join('')||'<div class="small">Connect the live feed, then make a Razorpay test-mode payment to see it here.</div>'}
 function toggleRun(){connect()}
 async function sendTestEvent(){const btn=el('testBtn');btn.disabled=true;try{const r=await fetch('/api/v1/demo/event',{method:'POST'});const data=await r.json();if(!r.ok)throw new Error(data.detail||'Demo event disabled');}catch(e){alert(e.message)}finally{btn.disabled=false}}
-function connect(){if(state.ws&&state.ws.readyState===1){state.running=true;return}if(state.reconnectTimer){clearTimeout(state.reconnectTimer);state.reconnectTimer=null}state.ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws/transactions');state.ws.onopen=()=>{state.running=true;state.reconnectDelay=1000;el('runBtn').textContent='● LIVE CONNECTED';el('runBtn').disabled=true};state.ws.onmessage=e=>{
-    const t=JSON.parse(e.data);
-
-    if(t.type==='status'){
+function connect(){
+    if(state.ws && state.ws.readyState===1){
+        state.running=true;
         return;
     }
 
-    // Prevent the same Razorpay payment from appearing multiple times
-    const paymentId = t.provider_id || t.transaction_id;
-
-    if(paymentId){
-        state.tx = state.tx.filter(x =>
-            (x.provider_id || x.transaction_id) !== paymentId
-        );
+    if(state.reconnectTimer){
+        clearTimeout(state.reconnectTimer);
+        state.reconnectTimer=null;
     }
-    if (!state.tx.some(x => x.transaction_id === t.transaction_id)) {
-    state.tx.unshift(t);
-    state.tx = state.tx.slice(0, 100);
+
+    state.ws=new WebSocket(
+        (location.protocol==='https:'?'wss':'ws')+
+        '://'+location.host+'/ws/transactions'
+    );
+
+    state.ws.onopen=()=>{
+        state.running=true;
+        state.reconnectDelay=1000;
+        el('runBtn').textContent='● LIVE CONNECTED';
+        el('runBtn').disabled=true;
+    };
+
+    state.ws.onmessage=e=>{
+        const t=JSON.parse(e.data);
+
+        if(t.type==='status'){
+            return;
+        }
+
+        state.tx.unshift(t);
+        state.tx=state.tx.slice(0,100);
+
+        renderFeed();
+
+        if(state.tab==='live'){
+            renderLive();
+        }
+
+        renderOverview();
+        renderAlerts();
+        renderExplorer();
+        renderCustomers();
+        renderAudit();
+        refreshHeader();
+    };
+
+    state.ws.onerror=()=>{
+        try{
+            state.ws.close();
+        }catch(e){}
+    };
+
+    state.ws.onclose=()=>{
+        state.running=false;
+        el('runBtn').disabled=false;
+        el('runBtn').textContent='Connect Live Feed';
+
+        state.reconnectTimer=setTimeout(
+            connect,
+            state.reconnectDelay
+        );
+
+        state.reconnectDelay=Math.min(
+            state.reconnectDelay*2,
+            10000
+        );
+    };
 }
-    renderFeed();
-
-    if(state.tab==='live') renderLive();
-
-    renderOverview();
-    renderAlerts();
-    renderExplorer();
-    renderCustomers();
-    renderAudit();
-    refreshHeader();
-};
-;renderFeed();if(state.tab==='live')renderLive();renderOverview();renderAlerts();renderExplorer();renderCustomers();renderAudit();refreshHeader()};state.ws.onerror=()=>{try{state.ws.close()}catch(e){}};state.ws.onclose=()=>{state.running=false;el('runBtn').disabled=false;el('runBtn').textContent='Connect Live Feed';state.reconnectTimer=setTimeout(connect,state.reconnectDelay);state.reconnectDelay=Math.min(state.reconnectDelay*2,10000)}}
 async function renderAlerts(){const a=await api('/api/v1/alerts');el('tab-alerts').innerHTML=`<div class="card"><h2>OPEN RISK ALERTS</h2>${a.length?a.map(t=>`<div class="row" onclick="showTx('${t.id}')"><div><b>${t.id} • ₹${t.amount.toFixed(0)}</b><div class="small">${t.customer_id} • ${new Date(t.created_at).toLocaleString()}</div></div><span class="badge high">HIGH ${t.risk_score}</span></div>`).join(''):'<div class="small">No open high-risk alerts.</div>'}</div>`}
 async function renderExplorer(){el('tab-explorer').innerHTML=`<div class="card"><div class="toolbar"><input class="input" id="search" placeholder="Search transaction, customer, method"><select class="input" id="risk"><option value="">All risk</option><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select><button class="btn" onclick="searchTx()">Search</button></div><div id="table"></div></div>`;searchTx()}
 async function searchTx(){const q=encodeURIComponent(el('search')?.value||'');const r=el('risk')?.value||'';const rows=await api(`/api/v1/transactions?limit=100&q=${q}&risk=${r}`);el('table').innerHTML=`<table class="table"><tr><th>Transaction</th><th>Amount</th><th>Risk</th><th>Decision</th><th>Time</th></tr>${rows.map(t=>`<tr onclick="showTx('${t.id}')"><td>${t.id}<div class="small">${t.customer_id}</div></td><td>₹${t.amount.toFixed(2)}</td><td class="${t.risk_level.toLowerCase()}">${t.risk_level} ${t.risk_score}</td><td>${t.decision}</td><td>${new Date(t.created_at).toLocaleTimeString()}</td></tr>`).join('')}</table>`}
