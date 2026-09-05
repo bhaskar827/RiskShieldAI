@@ -72,8 +72,63 @@ def init_db():
     for name, definition in [('source', "TEXT DEFAULT 'simulation'"), ('provider_id', 'TEXT'), ('event_type', 'TEXT'), ('currency', "TEXT DEFAULT 'INR'")]:
         if name not in cols:
             c.execute(f'ALTER TABLE transactions ADD COLUMN {name} {definition}')
-    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_provider_event ON transactions(provider_id, event_type)')
-    c.commit(); c.close()
+# Remove the old lifecycle-based uniqueness rule
+    c.execute('DROP INDEX IF EXISTS idx_transactions_provider_event')
+
+    # Clean up existing duplicate transactions.
+    # Keep the newest row for each Razorpay payment ID.
+    duplicates = c.execute('''
+        SELECT provider_id, COUNT(*) AS n
+        FROM transactions
+        WHERE provider_id IS NOT NULL
+        GROUP BY provider_id
+        HAVING COUNT(*) > 1
+    ''').fetchall()
+
+    for dup in duplicates:
+        provider_id = dup['provider_id']
+
+        keep = c.execute(
+            '''
+            SELECT id
+            FROM transactions
+            WHERE provider_id=?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            ''',
+            (provider_id,)
+        ).fetchone()['id']
+
+        old_rows = c.execute(
+            '''
+            SELECT id
+            FROM transactions
+            WHERE provider_id=? AND id<>?
+            ''',
+            (provider_id, keep)
+        ).fetchall()
+
+        for old in old_rows:
+            c.execute(
+                '''
+                UPDATE audit_logs
+                SET transaction_id=?
+                WHERE transaction_id=?
+                ''',
+                (keep, old['id'])
+            )
+
+            c.execute(
+                'DELETE FROM transactions WHERE id=?',
+                (old['id'],)
+            )
+
+    # From now on, one Razorpay payment ID = one transaction
+    c.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_provider
+        ON transactions(provider_id)
+        WHERE provider_id IS NOT NULL
+    ''')    c.commit(); c.close()
 
 init_db()
 
